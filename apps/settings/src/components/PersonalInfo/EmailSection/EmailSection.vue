@@ -1,90 +1,80 @@
 <!--
-	- @copyright 2021, Christopher Ng <chrng8@gmail.com>
-	-
-	- @author Christopher Ng <chrng8@gmail.com>
-	-
-	- @license GNU AGPL version 3 or any later version
-	-
-	- This program is free software: you can redistribute it and/or modify
-	- it under the terms of the GNU Affero General Public License as
-	- published by the Free Software Foundation, either version 3 of the
-	- License, or (at your option) any later version.
-	-
-	- This program is distributed in the hope that it will be useful,
-	- but WITHOUT ANY WARRANTY; without even the implied warranty of
-	- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	- GNU Affero General Public License for more details.
-	-
-	- You should have received a copy of the GNU Affero General Public License
-	- along with this program. If not, see <http://www.gnu.org/licenses/>.
+  - SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <template>
-	<section>
-		<HeaderBar
-			:account-property="accountProperty"
-			label-for="email"
-			:handle-scope-change="savePrimaryEmailScope"
-			:is-editable="true"
-			:is-multi-value-supported="true"
-			:is-valid-section="isValidSection"
-			:scope.sync="primaryEmail.scope"
-			@add-additional="onAddAdditionalEmail" />
-
-		<template v-if="displayNameChangeSupported">
-			<Email
-				:primary="true"
+	<section class="section-emails">
+		<template v-if="emailChangeSupported">
+			<EmailSectionEntry
+				:input-id="inputId"
+				primary
 				:scope.sync="primaryEmail.scope"
 				:email.sync="primaryEmail.value"
 				:active-notification-email.sync="notificationEmail"
 				@update:email="onUpdateEmail"
 				@update:notification-email="onUpdateNotificationEmail" />
+
+			<!-- TODO use unique key for additional email when uniqueness can be guaranteed, see https://github.com/nextcloud/server/issues/26866 -->
+			<EmailSectionEntry
+				v-for="(additionalEmail, index) in additionalEmails"
+				:key="additionalEmail.key"
+				:index="index"
+				:scope.sync="additionalEmail.scope"
+				:email.sync="additionalEmail.value"
+				:local-verification-state="parseInt(additionalEmail.locallyVerified, 10)"
+				:active-notification-email.sync="notificationEmail"
+				@update:email="onUpdateEmail"
+				@update:notification-email="onUpdateNotificationEmail"
+				@delete-additional-email="onDeleteAdditionalEmail(index)" />
+
+			<NcFormBox class="section-emails__add">
+				<NcFormBoxButton
+					:label="t('settings', 'Additional address')"
+					:disabled="!isValidSection"
+					@click="onAddAdditionalEmail">
+					<template #icon>
+						<Plus :size="20" />
+					</template>
+				</NcFormBoxButton>
+			</NcFormBox>
 		</template>
+
 		<span v-else>
 			{{ primaryEmail.value || t('settings', 'No email address set') }}
 		</span>
-		<Email v-for="(additionalEmail, index) in additionalEmails"
-			:key="index"
-			:index="index"
-			:scope.sync="additionalEmail.scope"
-			:email.sync="additionalEmail.value"
-			:local-verification-state="parseInt(additionalEmail.locallyVerified, 10)"
-			:active-notification-email.sync="notificationEmail"
-			@update:email="onUpdateEmail"
-			@update:notification-email="onUpdateNotificationEmail"
-			@delete-additional-email="onDeleteAdditionalEmail(index)" />
 	</section>
 </template>
 
 <script>
 import { loadState } from '@nextcloud/initial-state'
-import { showError } from '@nextcloud/dialogs'
+import NcFormBox from '@nextcloud/vue/components/NcFormBox'
+import NcFormBoxButton from '@nextcloud/vue/components/NcFormBoxButton'
+import Plus from 'vue-material-design-icons/Plus.vue'
+import EmailSectionEntry from './EmailSectionEntry.vue'
+import { DEFAULT_ADDITIONAL_EMAIL_SCOPE } from '../../../constants/AccountPropertyConstants.js'
+import { removeAdditionalEmail, savePrimaryEmail } from '../../../service/PersonalInfo/EmailService.js'
+import { handleError } from '../../../utils/handlers.ts'
+import { validateEmail } from '../../../utils/validate.js'
 
-import Email from './Email'
-import HeaderBar from '../shared/HeaderBar'
-
-import { ACCOUNT_PROPERTY_READABLE_ENUM, DEFAULT_ADDITIONAL_EMAIL_SCOPE } from '../../../constants/AccountPropertyConstants'
-import { savePrimaryEmail, savePrimaryEmailScope, removeAdditionalEmail } from '../../../service/PersonalInfo/EmailService'
-import { validateEmail } from '../../../utils/validate'
-
-const { emails: { additionalEmails, primaryEmail, notificationEmail } } = loadState('settings', 'personalInfoParameters', {})
-const { displayNameChangeSupported } = loadState('settings', 'accountParameters', {})
+const { emailMap: { additionalEmails, primaryEmail, notificationEmail } } = loadState('settings', 'personalInfoParameters', {})
+const { emailChangeSupported } = loadState('settings', 'accountParameters', {})
 
 export default {
 	name: 'EmailSection',
 
 	components: {
-		HeaderBar,
-		Email,
+		EmailSectionEntry,
+		NcFormBox,
+		NcFormBoxButton,
+		Plus,
 	},
 
 	data() {
 		return {
-			accountProperty: ACCOUNT_PROPERTY_READABLE_ENUM.EMAIL,
-			additionalEmails,
-			displayNameChangeSupported,
-			primaryEmail,
-			savePrimaryEmailScope,
+			additionalEmails: additionalEmails.map((properties) => ({ ...properties, key: this.generateUniqueKey() })),
+			emailChangeSupported,
+			primaryEmail: { ...primaryEmail },
 			notificationEmail,
 		}
 	},
@@ -97,6 +87,10 @@ export default {
 			return null
 		},
 
+		inputId() {
+			return `account-property-${this.primaryEmail.name}`
+		},
+
 		isValidSection() {
 			return validateEmail(this.primaryEmail.value)
 				&& this.additionalEmails.map(({ value }) => value).every(validateEmail)
@@ -106,6 +100,7 @@ export default {
 			get() {
 				return this.primaryEmail.value
 			},
+
 			set(value) {
 				this.primaryEmail.value = value
 			},
@@ -115,7 +110,7 @@ export default {
 	methods: {
 		onAddAdditionalEmail() {
 			if (this.isValidSection) {
-				this.additionalEmails.push({ value: '', scope: DEFAULT_ADDITIONAL_EMAIL_SCOPE })
+				this.additionalEmails.push({ value: '', scope: DEFAULT_ADDITIONAL_EMAIL_SCOPE, key: this.generateUniqueKey() })
 			}
 		},
 
@@ -141,7 +136,11 @@ export default {
 				const responseData = await savePrimaryEmail(this.primaryEmailValue)
 				this.handleResponse(responseData.ocs?.meta?.status)
 			} catch (e) {
-				this.handleResponse('error', 'Unable to update primary email address', e)
+				this.handleResponse(
+					'error',
+					t('settings', 'Unable to update primary email address'),
+					e,
+				)
 			}
 		},
 
@@ -150,7 +149,11 @@ export default {
 				const responseData = await removeAdditionalEmail(this.firstAdditionalEmail)
 				this.handleDeleteFirstAdditionalEmail(responseData.ocs?.meta?.status)
 			} catch (e) {
-				this.handleResponse('error', 'Unable to delete additional email address', e)
+				this.handleResponse(
+					'error',
+					t('settings', 'Unable to delete additional email address'),
+					e,
+				)
 			}
 		},
 
@@ -158,26 +161,32 @@ export default {
 			if (status === 'ok') {
 				this.$delete(this.additionalEmails, 0)
 			} else {
-				this.handleResponse('error', 'Unable to delete additional email address', {})
+				this.handleResponse(
+					'error',
+					t('settings', 'Unable to delete additional email address'),
+					{},
+				)
 			}
 		},
 
 		handleResponse(status, errorMessage, error) {
 			if (status !== 'ok') {
-				showError(t('settings', errorMessage))
-				this.logger.error(errorMessage, error)
+				handleError(error, errorMessage)
 			}
+		},
+
+		generateUniqueKey() {
+			return Math.random().toString(36).substring(2)
 		},
 	},
 }
 </script>
 
 <style lang="scss" scoped>
-section {
-	padding: 10px 10px;
-
-	&::v-deep button:disabled {
-		cursor: default;
-	}
+.section-emails {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 6px 0;
 }
 </style>

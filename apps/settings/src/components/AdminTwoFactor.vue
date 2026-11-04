@@ -1,135 +1,140 @@
+<!--
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <template>
-	<div>
-		<p class="settings-hint">
-			{{ t('settings', 'Two-factor authentication can be enforced for all users and specific groups. If they do not have a two-factor provider configured, they will be unable to log into the system.') }}
-		</p>
+	<NcSettingsSection
+		:name="t('settings', 'Two-Factor Authentication')"
+		:description="t('settings', 'Two-factor authentication can be enforced for all accounts and specific groups. If they do not have a two-factor provider configured, they will be unable to log into the system.')"
+		:doc-url="twoFactorAdminDoc">
 		<p v-if="loading">
 			<span class="icon-loading-small two-factor-loading" />
 			<span>{{ t('settings', 'Enforce two-factor authentication') }}</span>
 		</p>
-		<p v-else>
-			<input id="two-factor-enforced"
-				v-model="enforced"
-				type="checkbox"
-				class="checkbox">
-			<label for="two-factor-enforced">{{ t('settings', 'Enforce two-factor authentication') }}</label>
-		</p>
-		<template v-if="enforced">
+		<NcCheckboxRadioSwitch
+			v-else
+			id="two-factor-enforced"
+			v-model="twoFactorState.enforced"
+			type="switch">
+			{{ t('settings', 'Enforce two-factor authentication') }}
+		</NcCheckboxRadioSwitch>
+		<template v-if="twoFactorState.enforced">
 			<h3>{{ t('settings', 'Limit to groups') }}</h3>
 			{{ t('settings', 'Enforcement of two-factor authentication can be set for certain groups only.') }}
-			<p>
+			<p class="top-margin">
 				{{ t('settings', 'Two-factor authentication is enforced for all members of the following groups.') }}
 			</p>
 			<p>
-				<Multiselect v-model="enforcedGroups"
+				<label for="enforcedGroups">
+					<span>{{ t('settings', 'Enforced groups') }}</span>
+				</label>
+				<NcSelect
+					v-model="twoFactorState.enforcedGroups"
+					input-id="enforcedGroups"
 					:options="groups"
-					:placeholder="t('settings', 'Enforced groups')"
 					:disabled="loading"
 					:multiple="true"
-					:searchable="true"
 					:loading="loadingGroups"
-					:show-no-options="false"
-					:close-on-select="false"
-					@search-change="searchGroup" />
+					keep-open
+					@search="searchGroup" />
 			</p>
-			<p>
+			<p class="top-margin">
 				{{ t('settings', 'Two-factor authentication is not enforced for members of the following groups.') }}
 			</p>
 			<p>
-				<Multiselect v-model="excludedGroups"
+				<label for="excludedGroups">
+					<span>{{ t('settings', 'Excluded groups') }}</span>
+				</label>
+				<NcSelect
+					v-model="twoFactorState.excludedGroups"
+					input-id="excludedGroups"
 					:options="groups"
-					:placeholder="t('settings', 'Excluded groups')"
 					:disabled="loading"
 					:multiple="true"
-					:searchable="true"
 					:loading="loadingGroups"
-					:show-no-options="false"
-					:close-on-select="false"
-					@search-change="searchGroup" />
+					keep-open
+					@search="searchGroup" />
 			</p>
-			<p>
+			<p class="top-margin">
 				<em>
 					<!-- this text is also found in the documentation. update it there as well if it ever changes -->
-					{{ t('settings', 'When groups are selected/excluded, they use the following logic to determine if a user has 2FA enforced: If no groups are selected, 2FA is enabled for everyone except members of the excluded groups. If groups are selected, 2FA is enabled for all members of these. If a user is both in a selected and excluded group, the selected takes precedence and 2FA is enforced.') }}
+					{{ t('settings', 'When groups are selected/excluded, they use the following logic to determine if an account has 2FA enforced: If no groups are selected, 2FA is enabled for everyone except members of the excluded groups. If groups are selected, 2FA is enabled for all members of these. If an account is both in a selected and excluded group, the selected takes precedence and 2FA is enforced.') }}
 				</em>
 			</p>
 		</template>
-		<p>
-			<button v-if="dirty"
-				class="button primary"
+		<p class="top-margin">
+			<NcButton
+				v-if="dirty"
+				variant="primary"
 				:disabled="loading"
 				@click="saveChanges">
 				{{ t('settings', 'Save changes') }}
-			</button>
+			</NcButton>
 		</p>
-	</div>
+	</NcSettingsSection>
 </template>
 
 <script>
 import axios from '@nextcloud/axios'
-import Multiselect from '@nextcloud/vue/dist/Components/Multiselect'
-import _ from 'lodash'
-import { generateUrl, generateOcsUrl } from '@nextcloud/router'
+import { loadState } from '@nextcloud/initial-state'
+import { PwdConfirmationMode } from '@nextcloud/password-confirmation'
+import { generateOcsUrl, generateUrl } from '@nextcloud/router'
+import debounce from 'lodash/debounce.js'
+import sortedUniq from 'lodash/sortedUniq.js'
+import uniq from 'lodash/uniq.js'
+import NcButton from '@nextcloud/vue/components/NcButton'
+import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwitch'
+import NcSelect from '@nextcloud/vue/components/NcSelect'
+import NcSettingsSection from '@nextcloud/vue/components/NcSettingsSection'
+import logger from '../logger.ts'
 
 export default {
 	name: 'AdminTwoFactor',
 	components: {
-		Multiselect,
+		NcSelect,
+		NcButton,
+		NcCheckboxRadioSwitch,
+		NcSettingsSection,
 	},
+
 	data() {
 		return {
 			loading: false,
 			dirty: false,
 			groups: [],
 			loadingGroups: false,
+			twoFactorAdminDoc: loadState('settings', 'two-factor-admin-doc'),
+			twoFactorState: loadState('settings', 'mandatory2FAState'),
 		}
 	},
-	computed: {
-		enforced: {
-			get() {
-				return this.$store.state.enforced
-			},
-			set(val) {
+
+	watch: {
+		twoFactorState: {
+			deep: true,
+			handler() {
 				this.dirty = true
-				this.$store.commit('setEnforced', val)
-			},
-		},
-		enforcedGroups: {
-			get() {
-				return this.$store.state.enforcedGroups
-			},
-			set(val) {
-				this.dirty = true
-				this.$store.commit('setEnforcedGroups', val)
-			},
-		},
-		excludedGroups: {
-			get() {
-				return this.$store.state.excludedGroups
-			},
-			set(val) {
-				this.dirty = true
-				this.$store.commit('setExcludedGroups', val)
 			},
 		},
 	},
+
 	mounted() {
 		// Groups are loaded dynamically, but the assigned ones *should*
 		// be valid groups, so let's add them as initial state
-		this.groups = _.sortedUniq(_.uniq(this.enforcedGroups.concat(this.excludedGroups)))
+		this.groups = sortedUniq(uniq(this.twoFactorState.enforcedGroups.concat(this.twoFactorState.excludedGroups)))
 
 		// Populate the groups with a first set so the dropdown is not empty
 		// when opening the page the first time
 		this.searchGroup('')
 	},
+
 	methods: {
-		searchGroup: _.debounce(function(query) {
+		searchGroup: debounce(function(query) {
 			this.loadingGroups = true
 			axios.get(generateOcsUrl('cloud/groups?offset=0&search={query}&limit=20', { query }))
-				.then(res => res.data.ocs)
-				.then(ocs => ocs.data.groups)
-				.then(groups => { this.groups = _.sortedUniq(_.uniq(this.groups.concat(groups))) })
-				.catch(err => console.error('could not search groups', err))
+				.then((res) => res.data.ocs)
+				.then((ocs) => ocs.data.groups)
+				.then((groups) => { this.groups = sortedUniq(uniq(this.groups.concat(groups))) })
+				.catch((error) => logger.error('could not search groups', { error }))
 				.then(() => { this.loadingGroups = false })
 		}, 500),
 
@@ -137,18 +142,18 @@ export default {
 			this.loading = true
 
 			const data = {
-				enforced: this.enforced,
-				enforcedGroups: this.enforcedGroups,
-				excludedGroups: this.excludedGroups,
+				enforced: this.twoFactorState.enforced,
+				enforcedGroups: this.twoFactorState.enforcedGroups,
+				excludedGroups: this.twoFactorState.excludedGroups,
 			}
-			axios.put(generateUrl('/settings/api/admin/twofactorauth'), data)
-				.then(resp => resp.data)
-				.then(state => {
+			axios.put(generateUrl('/settings/api/admin/twofactorauth'), data, { confirmPassword: PwdConfirmationMode.Strict })
+				.then((resp) => resp.data)
+				.then((state) => {
 					this.state = state
 					this.dirty = false
 				})
-				.catch(err => {
-					console.error('could not save changes', err)
+				.catch((error) => {
+					logger.error('could not save changes', { error })
 				})
 				.then(() => { this.loading = false })
 		},
@@ -156,11 +161,14 @@ export default {
 }
 </script>
 
-<style>
+<style scoped>
 	.two-factor-loading {
 		display: inline-block;
 		vertical-align: sub;
-		margin-left: -2px;
-		margin-right: 1px;
+		margin-inline: -2px 1px;
+	}
+
+	.top-margin {
+		margin-top: 0.5rem;
 	}
 </style>

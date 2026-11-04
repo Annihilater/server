@@ -1,26 +1,12 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright 2019 Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Migration;
 
 use OCA\DAV\BackgroundJob\RegisterRegenerateBirthdayCalendars;
@@ -31,25 +17,20 @@ use OCP\Migration\IRepairStep;
 
 class RegenerateBirthdayCalendars implements IRepairStep {
 
-	/** @var IJobList */
-	private $jobList;
-
-	/** @var IConfig */
-	private $config;
-
 	/**
 	 * @param IJobList $jobList
 	 * @param IConfig $config
 	 */
-	public function __construct(IJobList $jobList,
-								IConfig $config) {
-		$this->jobList = $jobList;
-		$this->config = $config;
+	public function __construct(
+		private IJobList $jobList,
+		private IConfig $config,
+	) {
 	}
 
 	/**
 	 * @return string
 	 */
+	#[\Override]
 	public function getName() {
 		return 'Regenerating birthday calendars to use new icons and fix old birthday events without year';
 	}
@@ -57,6 +38,7 @@ class RegenerateBirthdayCalendars implements IRepairStep {
 	/**
 	 * @param IOutput $output
 	 */
+	#[\Override]
 	public function run(IOutput $output) {
 		// only run once
 		if ($this->config->getAppValue('dav', 'regeneratedBirthdayCalendarsForYearFix') === 'yes') {

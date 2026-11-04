@@ -1,44 +1,23 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Thomas Citharel <nextcloud@tcit.fr>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\CalDAV;
 
+use OCP\IAppConfig;
 use OCP\IConfig;
 use OCP\IL10N;
+use OCP\IUserManager;
+use Psr\Log\LoggerInterface;
 use Sabre\DAV\Collection;
+use Sabre\DAV\Exception\NotFound;
+use Sabre\Uri;
 
 class PublicCalendarRoot extends Collection {
-
-	/** @var CalDavBackend */
-	protected $caldavBackend;
-
-	/** @var \OCP\IL10N */
-	protected $l10n;
-
-	/** @var \OCP\IConfig */
-	protected $config;
 
 	/**
 	 * PublicCalendarRoot constructor.
@@ -46,17 +25,22 @@ class PublicCalendarRoot extends Collection {
 	 * @param CalDavBackend $caldavBackend
 	 * @param IL10N $l10n
 	 * @param IConfig $config
+	 * @param IAppConfig $appConfig
 	 */
-	public function __construct(CalDavBackend $caldavBackend, IL10N $l10n,
-						 IConfig $config) {
-		$this->caldavBackend = $caldavBackend;
-		$this->l10n = $l10n;
-		$this->config = $config;
+	public function __construct(
+		protected CalDavBackend $caldavBackend,
+		protected IL10N $l10n,
+		protected IConfig $config,
+		protected IAppConfig $appConfig,
+		private LoggerInterface $logger,
+		private IUserManager $userManager,
+	) {
 	}
 
 	/**
 	 * @inheritdoc
 	 */
+	#[\Override]
 	public function getName() {
 		return 'public-calendars';
 	}
@@ -64,15 +48,42 @@ class PublicCalendarRoot extends Collection {
 	/**
 	 * @inheritdoc
 	 */
+	#[\Override]
 	public function getChild($name) {
 		$calendar = $this->caldavBackend->getPublicCalendar($name);
-		return new PublicCalendar($this->caldavBackend, $calendar, $this->l10n, $this->config);
+		if (!$this->validateVisibility((string)$calendar['principaluri'])) {
+			throw new NotFound('Node with name \'' . $name . '\' could not be found');
+		}
+		return new PublicCalendar($this->caldavBackend, $calendar, $this->l10n, $this->config, $this->logger);
 	}
 
 	/**
 	 * @inheritdoc
 	 */
+	#[\Override]
 	public function getChildren() {
 		return [];
+	}
+
+	/**
+	 * Checks if the public calendar should be visible or not, based on
+	 * the configuration of the `hide_disabled_user_shares` setting within
+	 * `files_sharing` and the status of the owning user (disabled or not).
+	 */
+	private function validateVisibility(string $principalUri): bool {
+		$hideCalendarsOfDisabledUsers = $this->appConfig->getValueBool(
+			'files_sharing', 'hide_disabled_user_shares', true
+		);
+
+		if (!$hideCalendarsOfDisabledUsers) {
+			return true;
+		}
+
+		[$prefix, $name] = Uri\split($principalUri);
+		if ($prefix !== 'principals/users') {
+			return true;
+		}
+
+		return $this->userManager->get((string)$name)?->isEnabled() !== false;
 	}
 }

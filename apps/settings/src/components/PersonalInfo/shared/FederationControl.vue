@@ -1,120 +1,146 @@
 <!--
-	- @copyright 2021, Christopher Ng <chrng8@gmail.com>
-	-
-	- @author Christopher Ng <chrng8@gmail.com>
-	-
-	- @license GNU AGPL version 3 or any later version
-	-
-	- This program is free software: you can redistribute it and/or modify
-	- it under the terms of the GNU Affero General Public License as
-	- published by the Free Software Foundation, either version 3 of the
-	- License, or (at your option) any later version.
-	-
-	- This program is distributed in the hope that it will be useful,
-	- but WITHOUT ANY WARRANTY; without even the implied warranty of
-	- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	- GNU Affero General Public License for more details.
-	-
-	- You should have received a copy of the GNU Affero General Public License
-	- along with this program. If not, see <http://www.gnu.org/licenses/>.
+  - SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <template>
-	<Actions
-		:class="{ 'federation-actions': !additional, 'federation-actions--additional': additional }"
+	<NcActions
+		ref="federationActions"
+		class="federation-actions"
 		:aria-label="ariaLabel"
-		:default-icon="scopeIcon"
 		:disabled="disabled">
-		<ActionButton v-for="federationScope in federationScopes"
+		<template #icon>
+			<NcIconSvgWrapper :path="scopeIcon" />
+		</template>
+
+		<NcActionButton
+			v-for="federationScope in federationScopes"
 			:key="federationScope.name"
-			:aria-label="federationScope.tooltip"
-			class="federation-actions__btn"
-			:class="{ 'federation-actions__btn--active': scope === federationScope.name }"
 			:close-after-click="true"
-			:icon="federationScope.iconClass"
-			:title="federationScope.displayName"
-			@click.stop.prevent="changeScope(federationScope.name)">
-			{{ federationScope.tooltip }}
-		</ActionButton>
-	</Actions>
+			:disabled="!supportedScopes.includes(federationScope.name)"
+			:name="federationScope.displayName"
+			type="radio"
+			:value="federationScope.name"
+			:model-value="scope"
+			@update:modelValue="changeScope">
+			<template #icon>
+				<NcIconSvgWrapper :path="federationScope.icon" />
+			</template>
+			{{ supportedScopes.includes(federationScope.name) ? federationScope.tooltip : federationScope.tooltipDisabled }}
+		</NcActionButton>
+
+		<slot />
+	</NcActions>
 </template>
 
 <script>
-import Actions from '@nextcloud/vue/dist/Components/Actions'
-import ActionButton from '@nextcloud/vue/dist/Components/ActionButton'
 import { loadState } from '@nextcloud/initial-state'
-import { showError } from '@nextcloud/dialogs'
+import { t } from '@nextcloud/l10n'
+import NcActionButton from '@nextcloud/vue/components/NcActionButton'
+import NcActions from '@nextcloud/vue/components/NcActions'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
+import {
+	ACCOUNT_PROPERTY_READABLE_ENUM,
+	ACCOUNT_SETTING_PROPERTY_READABLE_ENUM,
+	PROFILE_READABLE_ENUM,
+	PROPERTY_READABLE_KEYS_ENUM,
+	PROPERTY_READABLE_SUPPORTED_SCOPES_ENUM,
+	SCOPE_ENUM,
+	SCOPE_PROPERTY_ENUM,
+	UNPUBLISHED_READABLE_PROPERTIES,
+} from '../../../constants/AccountPropertyConstants.ts'
+import { savePrimaryAccountPropertyScope } from '../../../service/PersonalInfo/PersonalInfoService.js'
+import { handleError } from '../../../utils/handlers.ts'
 
-import { ACCOUNT_PROPERTY_READABLE_ENUM, PROPERTY_READABLE_SUPPORTED_SCOPES_ENUM, SCOPE_ENUM, SCOPE_PROPERTY_ENUM } from '../../../constants/AccountPropertyConstants'
-
-const { lookupServerUploadEnabled } = loadState('settings', 'accountParameters', {})
+const {
+	federationEnabled,
+	lookupServerUploadEnabled,
+} = loadState('settings', 'accountParameters', {})
 
 export default {
 	name: 'FederationControl',
 
 	components: {
-		Actions,
-		ActionButton,
+		NcActions,
+		NcActionButton,
+		NcIconSvgWrapper,
 	},
 
 	props: {
-		accountProperty: {
+		readable: {
 			type: String,
 			required: true,
-			validator: (value) => Object.values(ACCOUNT_PROPERTY_READABLE_ENUM).includes(value),
+			validator: (value) => Object.values(ACCOUNT_PROPERTY_READABLE_ENUM).includes(value) || Object.values(ACCOUNT_SETTING_PROPERTY_READABLE_ENUM).includes(value) || value === PROFILE_READABLE_ENUM.PROFILE_VISIBILITY,
 		},
+
 		additional: {
 			type: Boolean,
 			default: false,
 		},
+
 		additionalValue: {
 			type: String,
 			default: '',
 		},
+
 		disabled: {
 			type: Boolean,
 			default: false,
 		},
-		handleScopeChange: {
+
+		handleAdditionalScopeChange: {
 			type: Function,
-			required: true,
+			default: null,
 		},
+
 		scope: {
 			type: String,
 			required: true,
 		},
 	},
 
+	emits: ['update:scope'],
+
 	data() {
 		return {
-			accountPropertyLowerCase: this.accountProperty.toLocaleLowerCase(),
+			readableLowerCase: this.readable.toLocaleLowerCase(),
 			initialScope: this.scope,
 		}
 	},
 
 	computed: {
 		ariaLabel() {
-			return t('settings', 'Change privacy level of {accountProperty}', { accountProperty: this.accountPropertyLowerCase })
+			return t('settings', 'Change scope level of {property}, current scope is {scope}', { property: this.readableLowerCase, scope: this.scopeDisplayNameLowerCase })
 		},
 
-		federationScopes() {
-			return Object.values(SCOPE_PROPERTY_ENUM).filter(({ name }) => this.supportedScopes.includes(name))
+		scopeDisplayNameLowerCase() {
+			return SCOPE_PROPERTY_ENUM[this.scope].displayName.toLocaleLowerCase()
 		},
 
 		scopeIcon() {
-			return SCOPE_PROPERTY_ENUM[this.scope].iconClass
+			return SCOPE_PROPERTY_ENUM[this.scope].icon
+		},
+
+		federationScopes() {
+			return Object.values(SCOPE_PROPERTY_ENUM)
 		},
 
 		supportedScopes() {
-			if (lookupServerUploadEnabled) {
-				return [
-					...PROPERTY_READABLE_SUPPORTED_SCOPES_ENUM[this.accountProperty],
-					SCOPE_ENUM.FEDERATED,
-					SCOPE_ENUM.PUBLISHED,
-				]
+			const scopes = PROPERTY_READABLE_SUPPORTED_SCOPES_ENUM[this.readable]
+
+			if (UNPUBLISHED_READABLE_PROPERTIES.includes(this.readable)) {
+				return scopes
 			}
 
-			return PROPERTY_READABLE_SUPPORTED_SCOPES_ENUM[this.accountProperty]
+			if (federationEnabled) {
+				scopes.push(SCOPE_ENUM.FEDERATED)
+			}
+
+			if (lookupServerUploadEnabled) {
+				scopes.push(SCOPE_ENUM.PUBLISHED)
+			}
+
+			return scopes
 		},
 	},
 
@@ -127,18 +153,21 @@ export default {
 			} else {
 				await this.updateAdditionalScope(scope)
 			}
+
+			// TODO: provide focus method from NcActions
+			this.$refs.federationActions.$refs?.triggerButton?.$el?.focus?.()
 		},
 
 		async updatePrimaryScope(scope) {
 			try {
-				const responseData = await this.handleScopeChange(scope)
+				const responseData = await savePrimaryAccountPropertyScope(PROPERTY_READABLE_KEYS_ENUM[this.readable], scope)
 				this.handleResponse({
 					scope,
 					status: responseData.ocs?.meta?.status,
 				})
 			} catch (e) {
 				this.handleResponse({
-					errorMessage: t('settings', 'Unable to update federation scope of the primary {accountProperty}', { accountProperty: this.accountPropertyLowerCase }),
+					errorMessage: t('settings', 'Unable to update federation scope of the primary {property}', { property: this.readableLowerCase }),
 					error: e,
 				})
 			}
@@ -146,14 +175,14 @@ export default {
 
 		async updateAdditionalScope(scope) {
 			try {
-				const responseData = await this.handleScopeChange(this.additionalValue, scope)
+				const responseData = await this.handleAdditionalScopeChange(this.additionalValue, scope)
 				this.handleResponse({
 					scope,
 					status: responseData.ocs?.meta?.status,
 				})
 			} catch (e) {
 				this.handleResponse({
-					errorMessage: t('settings', 'Unable to update federation scope of additional {accountProperty}', { accountProperty: this.accountPropertyLowerCase }),
+					errorMessage: t('settings', 'Unable to update federation scope of additional {property}', { property: this.readableLowerCase }),
 					error: e,
 				})
 			}
@@ -164,8 +193,7 @@ export default {
 				this.initialScope = scope
 			} else {
 				this.$emit('update:scope', this.initialScope)
-				showError(errorMessage)
-				this.logger.error(errorMessage, error)
+				handleError(error, errorMessage)
 			}
 		},
 	},
@@ -173,38 +201,15 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-	.federation-actions,
-	.federation-actions--additional {
-		opacity: 0.4 !important;
-
-		&:hover {
-			opacity: 0.8 !important;
-		}
-	}
-
-	.federation-actions--additional {
-		&::v-deep button {
+.federation-actions {
+	&--additional {
+		&:deep(button) {
 			// TODO remove this hack
-			padding-bottom: 7px;
 			height: 30px !important;
 			min-height: 30px !important;
 			width: 30px !important;
 			min-width: 30px !important;
 		}
 	}
-
-	.federation-actions__btn {
-		&::v-deep p {
-			width: 150px !important;
-			padding: 8px 0 !important;
-			color: var(--color-main-text) !important;
-			font-size: 12.8px !important;
-			line-height: 1.5em !important;
-		}
-	}
-
-	.federation-actions__btn--active {
-		background-color: var(--color-primary-light) !important;
-		box-shadow: inset 2px 0 var(--color-primary) !important;
-	}
+}
 </style>

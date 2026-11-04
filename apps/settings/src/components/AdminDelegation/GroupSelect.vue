@@ -1,55 +1,65 @@
+<!--
+  - SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <template>
-	<Multiselect
+	<NcSelect
 		v-model="selected"
-		class="group-multiselect"
+		:input-id="setting.id"
+		class="group-select"
 		:placeholder="t('settings', 'None')"
-		track-by="gid"
 		label="displayName"
 		:options="availableGroups"
-		open-direction="bottom"
-		:multiple="true"
-		:allow-empty="true" />
+		multiple
+		keep-open />
 </template>
 
 <script>
-import Multiselect from '@nextcloud/vue/dist/Components/Multiselect'
-import { generateUrl } from '@nextcloud/router'
 import axios from '@nextcloud/axios'
 import { showError } from '@nextcloud/dialogs'
-import logger from '../../logger'
+import { PwdConfirmationMode } from '@nextcloud/password-confirmation'
+import { generateUrl } from '@nextcloud/router'
+import NcSelect from '@nextcloud/vue/components/NcSelect'
+import logger from '../../logger.ts'
 
 export default {
 	name: 'GroupSelect',
 	components: {
-		Multiselect,
+		NcSelect,
 	},
+
 	props: {
 		availableGroups: {
 			type: Array,
 			default: () => [],
 		},
+
 		setting: {
 			type: Object,
 			required: true,
 		},
+
 		authorizedGroups: {
 			type: Array,
 			required: true,
 		},
 	},
+
 	data() {
 		return {
 			selected: this.authorizedGroups
 				.filter((group) => group.class === this.setting.class)
 				.map((groupToMap) => this.availableGroups.find((group) => group.gid === groupToMap.group_id))
-				.filter((group) => group !== undefined)
+				.filter((group) => group !== undefined),
 		}
 	},
+
 	watch: {
 		selected() {
 			this.saveGroups()
 		},
 	},
+
 	methods: {
 		async saveGroups() {
 			const data = {
@@ -57,19 +67,18 @@ export default {
 				class: this.setting.class,
 			}
 			try {
-				await axios.post(generateUrl('/apps/settings/') + '/settings/authorizedgroups/saveSettings', data)
+				await axios.post(generateUrl('/apps/settings/') + '/settings/authorizedgroups/saveSettings', data, { confirmPassword: PwdConfirmationMode.Strict })
 			} catch (e) {
 				showError(t('settings', 'Unable to modify setting'))
 				logger.error('Unable to modify setting', e)
 			}
 		},
-	}
+	},
 }
 </script>
 
 <style lang="scss">
-.group-multiselect {
+.group-select {
 	width: 100%;
-	margin-right: 0;
 }
 </style>

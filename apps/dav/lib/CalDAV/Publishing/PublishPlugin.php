@@ -1,35 +1,17 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Thomas Citharel <tcit@tcit.fr>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Citharel <nextcloud@tcit.fr>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\Publishing;
 
+use OCA\DAV\CalDAV\CalDavBackend;
 use OCA\DAV\CalDAV\Calendar;
+use OCA\DAV\CalDAV\CalendarHome;
 use OCA\DAV\CalDAV\Publishing\Xml\Publisher;
-use OCP\IConfig;
+use OCP\AppFramework\Http;
 use OCP\IURLGenerator;
 use Sabre\CalDAV\Xml\Property\AllowedSharingModes;
 use Sabre\DAV\Exception\NotFound;
@@ -50,29 +32,9 @@ class PublishPlugin extends ServerPlugin {
 	 */
 	protected $server;
 
-	/**
-	 * Config instance to get instance secret.
-	 *
-	 * @var IConfig
-	 */
-	protected $config;
-
-	/**
-	 * URL Generator for absolute URLs.
-	 *
-	 * @var IURLGenerator
-	 */
-	protected $urlGenerator;
-
-	/**
-	 * PublishPlugin constructor.
-	 *
-	 * @param IConfig $config
-	 * @param IURLGenerator $urlGenerator
-	 */
-	public function __construct(IConfig $config, IURLGenerator $urlGenerator) {
-		$this->config = $config;
-		$this->urlGenerator = $urlGenerator;
+	public function __construct(
+		protected IURLGenerator $urlGenerator,
+	) {
 	}
 
 	/**
@@ -83,6 +45,7 @@ class PublishPlugin extends ServerPlugin {
 	 *
 	 * @return string[]
 	 */
+	#[\Override]
 	public function getFeatures() {
 		// May have to be changed to be detected
 		return ['oc-calendar-publishing', 'calendarserver-sharing'];
@@ -96,6 +59,7 @@ class PublishPlugin extends ServerPlugin {
 	 *
 	 * @return string
 	 */
+	#[\Override]
 	public function getPluginName() {
 		return 'oc-calendar-publishing';
 	}
@@ -110,35 +74,44 @@ class PublishPlugin extends ServerPlugin {
 	 *
 	 * @param Server $server
 	 */
+	#[\Override]
 	public function initialize(Server $server) {
 		$this->server = $server;
 
 		$this->server->on('method:POST', [$this, 'httpPost']);
-		$this->server->on('propFind',    [$this, 'propFind']);
+		$this->server->on('propFind', [$this, 'propFind']);
 	}
 
 	public function propFind(PropFind $propFind, INode $node) {
+		if ($node instanceof CalendarHome && $propFind->getDepth() === 1) {
+			$backend = $node->getCalDAVBackend();
+			if ($backend instanceof CalDavBackend) {
+				$calendars = array_filter(
+					$node->getChildren(),
+					static fn ($child) => $child instanceof Calendar,
+				);
+				$resourceIds = array_map(
+					static fn (Calendar $calendar) => $calendar->getResourceId(),
+					$calendars,
+				);
+				$backend->preloadPublishStatuses($resourceIds);
+			}
+		}
 		if ($node instanceof Calendar) {
-			$propFind->handle('{'.self::NS_CALENDARSERVER.'}publish-url', function () use ($node) {
+			$propFind->handle('{' . self::NS_CALENDARSERVER . '}publish-url', function () use ($node) {
 				if ($node->getPublishStatus()) {
 					// We return the publish-url only if the calendar is published.
 					$token = $node->getPublishStatus();
-					$publishUrl = $this->urlGenerator->getAbsoluteURL($this->server->getBaseUri().'public-calendars/').$token;
+					$publishUrl = $this->urlGenerator->getAbsoluteURL($this->server->getBaseUri() . 'public-calendars/') . $token;
 
 					return new Publisher($publishUrl, true);
 				}
 			});
 
-			$propFind->handle('{'.self::NS_CALENDARSERVER.'}allowed-sharing-modes', function () use ($node) {
-				$canShare = (!$node->isSubscription() && $node->canWrite());
-				$canPublish = (!$node->isSubscription() && $node->canWrite());
+			$propFind->handle('{' . self::NS_CALENDARSERVER . '}allowed-sharing-modes', function () use ($propFind, $node) {
+				$canShare = !$node->isSubscription() && $this->canChangeSharing($propFind->getPath());
 
-				if ($this->config->getAppValue('dav', 'limitAddressBookAndCalendarSharingToOwner', 'no') === 'yes') {
-					$canShare &= ($node->getOwner() === $node->getPrincipalURI());
-					$canPublish &= ($node->getOwner() === $node->getPrincipalURI());
-				}
-
-				return new AllowedSharingModes($canShare, $canPublish);
+				return new AllowedSharingModes($canShare, $canShare);
 			});
 		}
 	}
@@ -155,8 +128,8 @@ class PublishPlugin extends ServerPlugin {
 		$path = $request->getPath();
 
 		// Only handling xml
-		$contentType = $request->getHeader('Content-Type');
-		if (strpos($contentType, 'application/xml') === false && strpos($contentType, 'text/xml') === false) {
+		$contentType = (string)$request->getHeader('Content-Type');
+		if (!str_contains($contentType, 'application/xml') && !str_contains($contentType, 'text/xml')) {
 			return;
 		}
 
@@ -181,76 +154,55 @@ class PublishPlugin extends ServerPlugin {
 		$this->server->xml->parse($requestBody, $request->getUrl(), $documentType);
 
 		switch ($documentType) {
+			case '{' . self::NS_CALENDARSERVER . '}publish-calendar':
 
-			case '{'.self::NS_CALENDARSERVER.'}publish-calendar':
-
-			// We can only deal with IShareableCalendar objects
-			if (!$node instanceof Calendar) {
-				return;
-			}
-			$this->server->transactionType = 'post-publish-calendar';
-
-			// Getting ACL info
-			$acl = $this->server->getPlugin('acl');
-
-			// If there's no ACL support, we allow everything
-			if ($acl) {
-				/** @var \Sabre\DAVACL\Plugin $acl */
-				$acl->checkPrivileges($path, '{DAV:}write');
-
-				$limitSharingToOwner = $this->config->getAppValue('dav', 'limitAddressBookAndCalendarSharingToOwner', 'no') === 'yes';
-				$isOwner = $acl->getCurrentUserPrincipal() === $node->getOwner();
-				if ($limitSharingToOwner && !$isOwner) {
+				// We can only deal with IShareableCalendar objects
+				if (!$node instanceof Calendar) {
 					return;
 				}
-			}
+				$this->server->transactionType = 'post-publish-calendar';
 
-			$node->setPublishStatus(true);
+				$this->canChangeSharing($path, true);
 
-			// iCloud sends back the 202, so we will too.
-			$response->setStatus(202);
+				$node->setPublishStatus(true);
 
-			// Adding this because sending a response body may cause issues,
-			// and I wanted some type of indicator the response was handled.
-			$response->setHeader('X-Sabre-Status', 'everything-went-well');
+				// iCloud sends back the 202, so we will too.
+				$response->setStatus(Http::STATUS_ACCEPTED);
 
-			// Breaking the event chain
-			return false;
+				// Adding this because sending a response body may cause issues,
+				// and I wanted some type of indicator the response was handled.
+				$response->setHeader('X-Sabre-Status', 'everything-went-well');
 
-			case '{'.self::NS_CALENDARSERVER.'}unpublish-calendar':
+				// Breaking the event chain
+				return false;
+			case '{' . self::NS_CALENDARSERVER . '}unpublish-calendar':
 
-			// We can only deal with IShareableCalendar objects
-			if (!$node instanceof Calendar) {
-				return;
-			}
-			$this->server->transactionType = 'post-unpublish-calendar';
-
-			// Getting ACL info
-			$acl = $this->server->getPlugin('acl');
-
-			// If there's no ACL support, we allow everything
-			if ($acl) {
-				/** @var \Sabre\DAVACL\Plugin $acl */
-				$acl->checkPrivileges($path, '{DAV:}write');
-
-				$limitSharingToOwner = $this->config->getAppValue('dav', 'limitAddressBookAndCalendarSharingToOwner', 'no') === 'yes';
-				$isOwner = $acl->getCurrentUserPrincipal() === $node->getOwner();
-				if ($limitSharingToOwner && !$isOwner) {
+				// We can only deal with IShareableCalendar objects
+				if (!$node instanceof Calendar) {
 					return;
 				}
-			}
+				$this->server->transactionType = 'post-unpublish-calendar';
 
-			$node->setPublishStatus(false);
+				$this->canChangeSharing($path, true);
 
-			$response->setStatus(200);
+				$node->setPublishStatus(false);
 
-			// Adding this because sending a response body may cause issues,
-			// and I wanted some type of indicator the response was handled.
-			$response->setHeader('X-Sabre-Status', 'everything-went-well');
+				$response->setStatus(Http::STATUS_OK);
 
-			// Breaking the event chain
-			return false;
+				// Adding this because sending a response body may cause issues,
+				// and I wanted some type of indicator the response was handled.
+				$response->setHeader('X-Sabre-Status', 'everything-went-well');
 
+				// Breaking the event chain
+				return false;
 		}
+	}
+
+	private function canChangeSharing(string $path, bool $throwExceptions = false): bool {
+		$acl = $this->server->getPlugin('acl');
+		if (!$acl instanceof \Sabre\DAVACL\Plugin) {
+			return true;
+		}
+		return $acl->checkPrivileges($path, '{DAV:}write-acl', \Sabre\DAVACL\Plugin::R_PARENT, $throwExceptions);
 	}
 }
